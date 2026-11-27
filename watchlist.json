@@ -1,0 +1,129 @@
+{
+  "windowHours": 168,
+  "terms": [
+    {
+      "name": "OpenAI",
+      "category": "clients",
+      "aliases": [
+        "ChatGPT"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Anthropic",
+      "category": "clients",
+      "aliases": [
+        "Claude"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Google DeepMind",
+      "category": "clients",
+      "aliases": [
+        "DeepMind",
+        "Gemini"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Meta AI",
+      "category": "clients",
+      "aliases": [
+        "Meta"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Mistral AI",
+      "category": "clients",
+      "aliases": [
+        "Le Chat"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Hugging Face",
+      "category": "clients",
+      "aliases": [
+        "HuggingFace"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "NVIDIA",
+      "category": "competitors",
+      "aliases": [
+        "Nvidia"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Microsoft",
+      "category": "competitors",
+      "aliases": [
+        "Azure AI",
+        "GitHub Copilot"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Amazon Web Services",
+      "category": "competitors",
+      "aliases": [
+        "AWS",
+        "Amazon Bedrock"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "(\"language model\" OR \"reasoning model\" OR \"multimodal model\" OR \"foundation model\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Models & releases"
+    },
+    {
+      "name": "(\"AI agent\" OR \"AI agents\" OR \"agentic AI\" OR \"coding agent\" OR \"model context protocol\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Agents & developer tools"
+    },
+    {
+      "name": "(\"AI infrastructure\" OR \"AI chip\" OR \"GPU cluster\" OR \"AI accelerator\" OR \"inference accelerator\" OR \"model inference\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Compute & infrastructure"
+    },
+    {
+      "name": "(\"AI safety\" OR \"AI regulation\" OR \"AI Act\" OR \"AI governance\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Safety & policy"
+    },
+    {
+      "name": "(\"open-weight\" OR \"open weights\" OR \"open-source AI\" OR \"model benchmark\" OR \"AI research\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Open models & research"
+    },
+    {
+      "name": "(\"generative AI\" OR \"large language model\" OR \"AI assistant\" OR \"AI startup\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "AI products & startups"
+    },
+    {
+      "name": "(\"robot learning\" OR \"robotics foundation model\" OR \"vision-language-action\" OR \"physical AI\")",
+      "category": "topics",
+      "aliases": [],
+      "enabled": true,
+      "notes": "Robotics & physical AI"
+    }
+  ]
+}

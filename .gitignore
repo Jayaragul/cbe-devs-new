@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+
+# Generated sweep output
+reports/
+_site/
+pages-state/
+sweep_*.log
+
+# Local editor / tooling state
+.claude/scheduled_tasks.lock
+.vscode/
+.idea/
+
+# Local env file (see .env.example)
+.env
+
+# Local storage backend
+data/
+
+# PyInstaller / Inno Setup build output (see desktop/AISignal.spec,
+# desktop/ai_signal_setup.iss) -- rebuilt from source, never committed.
+build/
+dist/
+desktop/installer_output/

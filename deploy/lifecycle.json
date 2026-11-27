@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Retention for gs://ai-signal-feed. Apply with:",
+    "    gcloud storage buckets update gs://ai-signal-feed --lifecycle-file=deploy/lifecycle.json",
+    "",
+    "matchesPrefix is load-bearing. Without it these rules match EVERY",
+    "object in the bucket, which would delete watchlist/watchlist.json 30",
+    "days after it was last written -- silently, and without a copy.",
+    "Never widen these rules to the bucket root."
+  ],
+  "lifecycle": {
+    "rule": [
+      {
+        "action": { "type": "Delete" },
+        "condition": {
+          "age": 30,
+          "matchesPrefix": ["archive/"]
+        }
+      },
+      {
+        "action": { "type": "Delete" },
+        "condition": {
+          "age": 30,
+          "matchesPrefix": ["logs/"]
+        }
+      }
+    ]
+  }
+}

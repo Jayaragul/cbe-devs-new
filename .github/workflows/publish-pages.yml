@@ -1,0 +1,83 @@
+name: Publish AI Signal
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 */8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      pages_artifact: github-pages-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      actions: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/configure-pages@v5
+      - name: Test the app
+        run: |
+          python -m unittest discover -s tests
+          python -m unittest discover -s desktop
+      - name: Restore the previous briefing archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p pages-state
+          previous_run=$(gh run list --workflow publish-pages.yml --branch "$GITHUB_REF_NAME" \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$previous_run" ]; then
+            artifact=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run/artifacts?name=ai-signal-history" \
+              --jq '.artifacts[] | select(.expired == false) | .id')
+            if [ -n "$artifact" ]; then
+              gh run download "$previous_run" --name ai-signal-history --dir pages-state
+            fi
+          fi
+      - name: Build the public briefing
+        run: python tools/build_pages.py --output _site --previous pages-state/briefing.json
+      - name: Save the rolling archive for the next run
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-signal-history
+          path: _site/data/briefing.json
+          retention-days: 15
+          if-no-files-found: error
+          overwrite: true
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          name: github-pages-${{ github.run_attempt }}
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ needs.build.outputs.pages_artifact }}

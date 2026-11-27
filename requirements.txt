@@ -1,0 +1,6 @@
+# The pipeline itself needs nothing: it is pure standard library, and the
+# test suite runs with no third-party packages installed at all.
+#
+# This single dependency is only required when AI_SIGNAL_STORAGE=gcs, and is
+# imported lazily so that a local run never needs it.
+google-cloud-storage>=2.14,<4

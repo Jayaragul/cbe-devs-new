@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="ai-signal-mode" content="server">
+  <meta name="description" content="AI Signal tracks AI research, releases, infrastructure and policy with links to the original sources.">
+  <title>AI Signal</title>
+  <link rel="stylesheet" href="assets/dashboard.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <img class="mark" src="assets/cbe-devs-mark.png" width="52" height="48" alt="">
+      <span class="brand-copy"><small>CBE Devs</small>AI Signal</span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-report" aria-controls="pane-report" aria-selected="true">Briefing <span class="n" id="reportTally">&mdash;</span></button>
+      <button class="tab" role="tab" id="tab-watch" aria-controls="pane-watch" aria-selected="false" tabindex="-1">Watchlist <span class="n" id="watchTally">&mdash;</span></button>
+      <button class="tab" role="tab" id="tab-archive" aria-controls="pane-archive" aria-selected="false" tabindex="-1">Archive <span class="n" id="archiveTally">&mdash;</span></button>
+    </nav>
+  </header>
+  <main>
+    <section class="hero" aria-labelledby="briefing-title">
+      <div class="hero-copy">
+        <p class="eyebrow" id="subWindow">Rolling 7-day briefing</p>
+        <h1 id="briefing-title">AI news, verified.</h1>
+        <p>Track model releases, new research, infrastructure and policy. Read each story at the source.</p>
+      </div>
+      <div class="hero-art"><img src="assets/signal-orbit.webp" width="1200" height="800" alt=""></div>
+    </section>
+
+    <dl class="strip" aria-label="Sweep statistics">
+      <div><dt>Verified stories</dt><dd class="big" id="stripVerified">&mdash;</dd></div>
+      <div><dt>Active watch terms</dt><dd class="big" id="termCount">&mdash;</dd></div>
+      <div><dt>Reporting window</dt><dd id="stripWindow">&mdash;</dd></div>
+      <div><dt>Last checked</dt><dd id="stripChecked">&mdash;</dd></div>
+    </dl>
+
+    <section class="pane" id="pane-report" role="tabpanel" aria-labelledby="tab-report" tabindex="0">
+      <div class="toolbar">
+        <div>
+          <h2>Latest stories</h2>
+          <p class="tb-status" id="refreshStatus" role="status">Loading the briefing…</p>
+        </div>
+        <div class="toolbar-actions" id="sweepControls">
+          <label class="tb-window" for="windowSelect">Window <select id="windowSelect"></select></label>
+          <button class="btn pri" id="forceRefresh" type="button" disabled>
+            <span class="ic" aria-hidden="true">↻</span> Run sweep
+          </button>
+        </div>
+      </div>
+      <div id="reportBanner"></div>
+      <div class="feed-controls" id="feedTools" hidden>
+        <div class="topic-filter" role="group" aria-label="Filter stories" id="feedFilters"></div>
+        <input class="feed-search" id="feedSearch" type="search" aria-label="Search stories" placeholder="Search stories">
+      </div>
+      <div id="reportBody"><div class="loading">Loading stories…</div></div>
+    </section>
+
+    <section class="pane" id="pane-watch" role="tabpanel" aria-labelledby="tab-watch" tabindex="0" hidden>
+      <div class="pane-head">
+        <div><h2>Watchlist</h2><p class="hint" id="watchHint">Add a company or topic, or turn a term off to skip it in the next sweep.</p></div>
+        <label class="who" id="nameEditor" for="editorName">Editing as <input id="editorName" type="text" placeholder="Your name" autocomplete="name" maxlength="40"></label>
+      </div>
+      <div id="watchBanner"></div>
+      <div class="groups" id="groups"><div class="loading">Loading the watchlist…</div></div>
+    </section>
+
+    <section class="pane" id="pane-archive" role="tabpanel" aria-labelledby="tab-archive" tabindex="0" hidden>
+      <div class="pane-head"><div><h2>Archive</h2><p class="hint">Browse reports from past sweeps.</p></div></div>
+      <div id="archiveBanner"></div>
+      <div class="archive" id="archiveList"><div class="loading">Loading reports…</div></div>
+    </section>
+  </main>
+  <footer class="foot"><span>Timestamps in India Standard Time</span><span id="footGenerated">No report published yet</span></footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var CATS = [
+    { id:"clients", title:"AI labs", note:"Research labs and model developers.", kind:"name", addLabel:"Add a lab" },
+    { id:"competitors", title:"Industry", note:"Chipmakers, platforms and infrastructure providers.", kind:"name", addLabel:"Add a company" },
+    { id:"topics", title:"Topics", note:"Follow a subject with keywords or Boolean queries.", kind:"query", addLabel:"Add a topic query" }
+  ];
+
+  var $  = function(s,r){ return (r||document).querySelector(s); };
+  var db = null, rows = [], editing = null, removing = null, dbReady = false;
+  var refreshing = false;
+  // The reporting window, in hours. Lives on the same watchlist document
+  // as `rows` and travels through the same GET/PUT -- so it is shared
+  // through whatever storage this deployment already uses for the
+  // watchlist (the bucket on Cloud Run, a single install's own local
+  // storage for the desktop build), not a separate per-browser setting.
+  var DEFAULT_WINDOW_HOURS = 168;
+  var windowHours = DEFAULT_WINDOW_HOURS;
+  var readOnly = document.querySelector('meta[name="ai-signal-mode"]').content === "snapshot";
+  var WINDOW_OPTIONS = [
+    [24, "24 hours"], [48, "2 days"], [72, "3 days"],
+    [24 * 7, "1 week"], [24 * 14, "2 weeks"], [24 * 30, "30 days"]
+  ];
+
+  /* ---------- editor name (per-viewer convenience only) ---------- */
+  var nameInput = $("#editorName");
+  function who(){ return (nameInput.value || "").trim() || "unattributed"; }
+  try { var saved = localStorage.getItem("ai-signal.editor"); if (saved) nameInput.value = saved; } catch(e){}
+  nameInput.addEventListener("input", function(){
+    try { localStorage.setItem("ai-signal.editor", nameInput.value); } catch(e){}
+  });
+
+  /* ---------- reporting window ----------
+     Not a per-viewer setting: it lives on the watchlist document, so
+     picking a value here and letting serverGetWatchlist/enterLocalMode's
+     catch branch set `windowHours` is what keeps every tab in sync with
+     whatever was last saved, rather than each browser inventing its own. */
+  var windowSelect = $("#windowSelect");
+  WINDOW_OPTIONS.forEach(function(opt){
+    var o = document.createElement("option");
+    o.value = opt[0];
+    o.textContent = opt[1];
+    windowSelect.appendChild(o);
+  });
+  function windowAdjective(hours){
+    if (hours === 24) return "24-hour";
+    if (hours % 24 === 0) return (hours / 24) + "-day";
+    return hours + "-hour";
+  }
+  function syncWindowSelect(){
+    windowSelect.value = String(windowHours);
+    $("#subWindow").textContent = "Rolling " + windowAdjective(windowHours) + " briefing";
+  }
+  syncWindowSelect();
+  windowSelect.addEventListener("change", function(){
+    windowHours = parseInt(windowSelect.value, 10) || DEFAULT_WINDOW_HOURS;
+    syncWindowSelect();
+    saveLocalWatchlist(rows);
+  });
+
+  /* ---------- tabs ---------- */
+  var tabs = [["#tab-report","#pane-report"],["#tab-watch","#pane-watch"],["#tab-archive","#pane-archive"]];
+  tabs.forEach(function(pair, i){
+    $(pair[0]).addEventListener("click", function(){ select(i); });
+    $(pair[0]).addEventListener("keydown", function(ev){
+      var d = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+      if (!d) return;
+      ev.preventDefault();
+      var n = (i + d + tabs.length) % tabs.length;
+      select(n); $(tabs[n][0]).focus();
+    });
+  });
+  function select(i){
+    tabs.forEach(function(pair, j){
+      $(pair[0]).setAttribute("aria-selected", String(i === j));
+      $(pair[0]).tabIndex = i === j ? 0 : -1;
+      $(pair[1]).hidden = (i !== j);
+    });
+  }
+
+  /* ---------- helpers ---------- */
+  function esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+  function slug(s){
+    var out = String(s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48);
+    return out || ("t" + Date.now().toString(36));
+  }
+  function splitList(s){
+    return String(s || "").split(/[,\n]/).map(function(x){ return x.trim(); }).filter(Boolean);
+  }
+  function istStamp(iso){
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d)) return "";
+    try {
+      return d.toLocaleString("en-GB", {
+        timeZone:"Asia/Kolkata", day:"2-digit", month:"short",
+        hour:"2-digit", minute:"2-digit", hour12:false
+      }) + " IST";
+    } catch(e){ return d.toISOString().slice(0,16).replace("T"," ") + " UTC"; }
+  }
+  function byCat(id){
+    return rows.filter(function(r){ return r.category === id; })
+               .sort(function(a,b){
+                 var d = (a.order || 0) - (b.order || 0);
+                 return d || String(a.name).localeCompare(String(b.name));
+               });
+  }
+  function shortIST(iso){
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d)) return "";
+    try {
+      return d.toLocaleString("en-GB", {
+        timeZone:"Asia/Kolkata", day:"2-digit", month:"short",
+        hour:"2-digit", minute:"2-digit", hour12:false
+      });
+    } catch(e){ return ""; }
+  }
+  function fmtWindow(startIso, endIso){
+    if (!startIso || !endIso) return "\u2014";
+    var s = shortIST(startIso), e = shortIST(endIso);
+    return (s && e) ? (s + " \u2192 " + e + " IST") : "\u2014";
+  }
+  function sumBuckets(d){
+    var b = (d && d.buckets) || {};
+    return ["clients","competitors","topics"].reduce(function(s,k){
+      return s + ((b[k] && b[k].items) ? b[k].items.length : 0);
+    }, 0);
+  }
+  function verifiedCount(d){
+    return (d && d.totalVerified != null) ? d.totalVerified : sumBuckets(d);
+  }
+
+  /* ---------- render report ---------- */
+  var latestReport = null;
+  var currentStories = [];
+  var feedCategory = "all";
+  var pageSize = 12;
+  var visibleLimit = pageSize;
+
+  var filters = $("#feedFilters");
+  var search = $("#feedSearch");
+  filters.innerHTML = [{ id: "all", title: "All stories" }].concat(CATS).map(function(cat){
+    return '<button type="button" data-filter="' + cat.id + '" aria-pressed="' +
+      (cat.id === feedCategory) + '">' + esc(cat.title) + '</button>';
+  }).join("");
+
+  function reportStories(report){
+    var buckets = report.buckets || {};
+    return CATS.flatMap(function(cat){
+      var bucket = buckets[cat.id] || {};
+      return (bucket.items || []).map(function(item){
+        return { item: item, category: cat };
+      });
+    }).sort(function(a, b){
+      return (Date.parse(b.item.publishedAt) || 0) - (Date.parse(a.item.publishedAt) || 0);
+    });
+  }
+
+  function storyCard(story, demo){
+    var it = story.item;
+    var title = esc(it.title || "Untitled story");
+    var url = /^https?:[/][/]/i.test(it.url || "") && !demo ? esc(it.url) : "";
+    var htmlLink = url ? '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' : "";
+    var topic = it.topicOrCompany || "";
+    if (story.category.id === "topics"){
+      var match = rows.find(function(row){
+        return row.category === "topics" && (row.name === topic || row.name.slice(0, 70) === topic);
+      });
+      if (match && match.notes) topic = match.notes;
+    }
+    return '<article class="story">' +
+      '<div class="story-meta"><span>' + esc(story.category.title) + '</span>' +
+        '<span>' + (it.promotional ? "Company announcement" : "Verified") + '</span></div>' +
+      '<h3>' + htmlLink + title + (url ? '</a>' : '') + '</h3>' +
+      '<p class="story-topic" title="' + esc(topic) + '">' + esc(topic) + '</p>' +
+      '<div class="story-foot"><span>' + esc(it.sourceName || "Source") + '</span>' +
+        '<span>' + esc(it.publishedDisplay || "") + '</span></div></article>';
+  }
+
+  function renderReportBody(report, stories, more){
+    if (!report){
+      return '<p class="empty">' + (readOnly ? "No published briefing is available." :
+        "Run a sweep to see verified stories from your watchlist.") + '</p>';
+    }
+
+    var cards = stories.length
+      ? '<div class="stories">' + stories.map(function(story){ return storyCard(story, report.demoData); }).join("") + '</div>'
+      : '<p class="empty">No verified stories in this selection.</p>';
+    var demo = report.demoData ? '<p class="demo-banner"><b>Offline demo.</b> These stories are fictional.</p>' : '';
+    var notes = report.notes || [];
+    var details = notes.length ? '<details class="notes"><summary>Verification record</summary><dl>' +
+      notes.map(function(n){ return '<dt>' + esc(n.label || "") + '</dt><dd>' + esc(n.text || "") + '</dd>'; }).join("") +
+      '</dl></details>' : '';
+    return demo + cards + (more || "") + details;
+  }
+
+  function renderFeed(){
+    var terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var matching = currentStories.filter(function(story){
+      if (feedCategory !== "all" && story.category.id !== feedCategory) return false;
+      var item = story.item;
+      var text = [item.title, item.sourceName, item.topicOrCompany, story.category.title].join(" ").toLowerCase();
+      return terms.every(function(term){ return text.includes(term); });
+    });
+    var visible = matching.slice(0, visibleLimit);
+    var count = matching.length
+      ? "Showing " + visible.length + " of " + matching.length + (matching.length === 1 ? " story" : " stories")
+      : "0 matches";
+    var more = latestReport && currentStories.length
+      ? '<div class="feed-more"><span id="feedCount" tabindex="-1">' + count + '</span>' +
+        (visible.length < matching.length ? '<button class="btn" type="button" id="showMore">Show more</button>' : '') + '</div>'
+      : "";
+    $("#feedTools").hidden = !currentStories.length;
+    $("#reportBody").innerHTML = renderReportBody(latestReport, visible, more);
+  }
+
+  filters.addEventListener("click", function(event){
+    var control = event.target.closest("button[data-filter]");
+    if (!control) return;
+    feedCategory = control.dataset.filter;
+    filters.querySelectorAll("button").forEach(function(button){
+      button.setAttribute("aria-pressed", String(button === control));
+    });
+    visibleLimit = pageSize;
+    renderFeed();
+  });
+
+  search.addEventListener("input", function(){
+    visibleLimit = pageSize;
+    renderFeed();
+  });
+
+  $("#reportBody").addEventListener("click", function(event){
+    if (event.target.id !== "showMore") return;
+    visibleLimit += pageSize;
+    renderFeed();
+    ($("#showMore") || $("#feedCount")).focus();
+  });
+
+  function renderReportTab(latest){
+    $("#reportTally").textContent = latest ? String(verifiedCount(latest)) : "\u2014";
+    $("#stripWindow").textContent = latest ? fmtWindow(latest.windowStart, latest.windowEnd) : "\u2014";
+    $("#stripChecked").textContent = latest ? (shortIST(latest.checkedAt) + " IST") : "\u2014";
+    $("#stripVerified").textContent = latest ? String(verifiedCount(latest)) : "\u2014";
+    $("#footGenerated").textContent = latest
+      ? ("Report generated " + shortIST(latest.checkedAt) + " IST.")
+      : "No report published yet.";
+    latestReport = latest;
+    currentStories = latest ? reportStories(latest) : [];
+    visibleLimit = pageSize;
+    renderFeed();
+    if (!refreshing){
+      setStatus(latest
+        ? ("Showing the report checked " + shortIST(latest.checkedAt) + " IST.")
+        : (readOnly ? "Waiting for the first published briefing." : "Ready for the first sweep."), "");
+    }
+  }
+  function setStatus(text, cls){
+    var el = $("#refreshStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.className = cls || "";
+  }
+  function renderArchive(list){
+    $("#archiveTally").textContent = String(list.length);
+    var host = $("#archiveList");
+    if (!list.length){
+      host.innerHTML = '<p class="empty">No reports saved yet.<span>Live sweep results appear here.</span></p>';
+      return;
+    }
+    host.innerHTML = list.map(function(d, i){
+      return '<details class="day" data-report-index="' + i + '">' +
+        '<summary><span class="dlabel">' + esc(d.date || "") + '</span>' +
+        '<span class="dwin">' + esc(fmtWindow(d.windowStart, d.windowEnd)) + '</span>' +
+        '<span class="dcount">' + verifiedCount(d) + ' verified</span></summary>' +
+        '<div class="daybody"></div></details>';
+    }).join("");
+
+    host.querySelectorAll(".day").forEach(function(day, index){
+      day.addEventListener("toggle", function(){
+        var body = day.querySelector(".daybody");
+        if (!day.open || body.hasChildNodes()) return;
+        var report = list[index];
+        body.innerHTML = renderReportBody(report, reportStories(report));
+      });
+    });
+  }
+  function reportsOffline(err){
+    var msg = err && err.code === "revoked"
+      ? "Your access ended while the page was open. Reload to try again."
+      : "The report store stopped syncing. Reload the page.";
+    var banner = '<div class="banner"><span><b>Reports could not be loaded.</b> ' + esc(msg) + '</span></div>';
+    $("#reportBanner").innerHTML = banner;
+    $("#archiveBanner").innerHTML = banner;
+  }
+
+  /* ---------- run a sweep ---------- */
+  $("#forceRefresh").addEventListener("click", function(){
+    if (refreshing || !dbReady) return;
+    refreshing = true;
+    var btn = this;
+    btn.disabled = true;
+    btn.classList.add("spin");
+    setStatus("Checking sources and verifying stories…", "");
+
+    var liveTerms = rows.map(function(r){
+      return {
+        name: r.name, category: r.category,
+        aliases: r.aliases || [], enabled: r.enabled !== false, nseSymbol: r.nseSymbol || ""
+      };
+    });
+
+    fetch("/api/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ terms: liveTerms, windowHours: windowHours })
+    }).then(function(resp){
+      // Read the body regardless of status: an error response is still a
+      // JSON object with a specific `error` string (a bad Brave key, a rate
+      // limit, a malformed request) that is far more useful than a bare
+      // status code -- parse it before deciding whether to throw.
+      return resp.json().catch(function(){ return null; }).then(function(body){
+        if (!resp.ok){
+          throw new Error((body && body.error) || ("HTTP " + resp.status));
+        }
+        return body;
+      });
+    }).then(function(report){
+      if (!report) throw new Error("empty response body");
+      applyNewReport(report);
+      setStatus("Refreshed just now" + (report.demoData ? " (demo data)." : " (live search)."), "ok");
+    }).catch(function(err){
+      var message = serverBacked
+        ? "The sweep could not finish. " + err.message
+        : "Connect to the AI Signal server to run a sweep.";
+      setStatus(message, "warn");
+    }).then(function(){
+      refreshing = false;
+      btn.disabled = false;
+      btn.classList.remove("spin");
+    });
+  });
+
+  /* ---------- writes ---------- */
+  function fail(err, verb){
+    var code = (err && err.code) || "unavailable";
+    var msg = code === "quota_exceeded" ? "The watchlist is full. Remove a term before adding another."
+            : code === "invalid_argument" ? "That change could not be saved \u2014 the term may be too long, or someone else just removed it. Reload to see the current list."
+            : code === "resource_exhausted" ? "Too many changes at once. Wait a moment, then retry."
+            : code === "revoked" ? "Your access to this watchlist ended. Reload the page."
+            : "Could not " + verb + " right now. Check your connection and retry.";
+    alert(msg);
+  }
+  /* mode: "cloud" (claude.ai db) or "local" (this browser's localStorage
+     only). Run sweep needs a watchlist to read regardless of which
+     mode is active, so both modes keep `rows` populated and editable. */
+  var mode = null;
+  var localReports = [];
+  var LS_WATCHLIST = "ai-signal.local.watchlist";
+  var LS_REPORTS = "ai-signal.local.reports";
+  var LS_WINDOW_HOURS = "ai-signal.local.windowHours";
+
+  function loadLocalWindowHours(){
+    try {
+      var raw = localStorage.getItem(LS_WINDOW_HOURS);
+      if (raw) return parseInt(raw, 10) || DEFAULT_WINDOW_HOURS;
+    } catch(e){}
+    return DEFAULT_WINDOW_HOURS;
+  }
+  function saveLocalWindowHours(hours){
+    try { localStorage.setItem(LS_WINDOW_HOURS, String(hours)); } catch(e){}
+  }
+
+  function localSeedWatchlist(){
+    return [
+      {"name": "OpenAI", "category": "clients", "aliases": ["ChatGPT"], "enabled": true},
+      {"name": "Anthropic", "category": "clients", "aliases": ["Claude"], "enabled": true},
+      {"name": "Google DeepMind", "category": "clients", "aliases": ["DeepMind", "Gemini"], "enabled": true},
+      {"name": "Meta AI", "category": "clients", "aliases": ["Meta"], "enabled": true},
+      {"name": "Mistral AI", "category": "clients", "aliases": ["Le Chat"], "enabled": true},
+      {"name": "Hugging Face", "category": "clients", "aliases": ["HuggingFace"], "enabled": true},
+      {"name": "NVIDIA", "category": "competitors", "aliases": ["Nvidia"], "enabled": true},
+      {"name": "Microsoft", "category": "competitors", "aliases": ["Azure AI", "GitHub Copilot"], "enabled": true},
+      {"name": "Amazon Web Services", "category": "competitors", "aliases": ["AWS", "Amazon Bedrock"], "enabled": true},
+      {"name": "(\"language model\" OR \"reasoning model\" OR \"multimodal model\" OR \"foundation model\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Models & releases"},
+      {"name": "(\"AI agent\" OR \"AI agents\" OR \"agentic AI\" OR \"coding agent\" OR \"model context protocol\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Agents & developer tools"},
+      {"name": "(\"AI infrastructure\" OR \"AI chip\" OR \"GPU cluster\" OR \"AI accelerator\" OR \"inference accelerator\" OR \"model inference\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Compute & infrastructure"},
+      {"name": "(\"AI safety\" OR \"AI regulation\" OR \"AI Act\" OR \"AI governance\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Safety & policy"},
+      {"name": "(\"open-weight\" OR \"open weights\" OR \"open-source AI\" OR \"model benchmark\" OR \"AI research\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Open models & research"},
+      {"name": "(\"generative AI\" OR \"large language model\" OR \"AI assistant\" OR \"AI startup\")", "category": "topics", "aliases": [], "enabled": true, "notes": "AI products & startups"},
+      {"name": "(\"robot learning\" OR \"robotics foundation model\" OR \"vision-language-action\" OR \"physical AI\")", "category": "topics", "aliases": [], "enabled": true, "notes": "Robotics & physical AI"}
+    ].map(normaliseRow);
+  }
+  function loadLocalWatchlist(){
+    try {
+      var raw = localStorage.getItem(LS_WATCHLIST);
+      if (raw) return JSON.parse(raw);
+    } catch(e){}
+    var seed = localSeedWatchlist();
+    saveLocalWatchlist(seed);
+    return seed;
+  }
+  function saveLocalWatchlist(list){
+    /* When the server is backed by shared storage, that is the copy that
+       matters -- localStorage is per-browser, so a colleague would never
+       see an edit kept only there. The browser copy is still written on
+       failure so an edit is not simply lost if the PUT does not land. */
+    if (serverBacked){
+      serverPutWatchlist(list).catch(function(){
+        try { localStorage.setItem(LS_WATCHLIST, JSON.stringify(list)); } catch(e){}
+        saveLocalWindowHours(windowHours);
+        alert("Could not save to shared storage. The change was kept in this "
+              + "browser only, so others will not see it — retry when the "
+              + "connection is back.");
+      });
+      return;
+    }
+    try { localStorage.setItem(LS_WATCHLIST, JSON.stringify(list)); } catch(e){}
+    saveLocalWindowHours(windowHours);
+  }
+
+  /* ---- shared watchlist, served by ai_signal/live/local_server.py ----
+     Present when the page is served by our own server (locally or on Cloud
+     Run); absent when the file is opened directly, which is why every call
+     has a localStorage fallback rather than an error path. */
+  var serverBacked = false;
+
+  function normaliseRow(row, index){
+    /* The stored document is the watchlist proper; the page additionally
+       needs a stable id and an ordering, which files edited by hand will
+       not carry. */
+    var name = String(row.name || "");
+    return {
+      id: row.id || (String(row.category || "clients") + "-" +
+                     name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40)
+                     || String(index)),
+      name: name,
+      category: row.category || "clients",
+      aliases: row.aliases || [],
+      nseSymbol: row.nseSymbol || row.nse_symbol || "",
+      notes: row.notes || "",
+      enabled: row.enabled !== false,
+      order: typeof row.order === "number" ? row.order : (index + 1) * 10,
+      addedBy: row.addedBy || "watchlist", createdAt: row.createdAt || "",
+      updatedBy: row.updatedBy || "watchlist", updatedAt: row.updatedAt || ""
+    };
+  }
+
+  function serverGetWatchlist(){
+    return fetch("/api/watchlist", { headers: { "Accept": "application/json" } })
+      .then(function(r){
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function(doc){
+        if (!doc || !doc.terms) throw new Error("no terms in document");
+        return {
+          rows: doc.terms.map(normaliseRow),
+          windowHours: WINDOW_OPTIONS.some(function(o){ return o[0] === doc.windowHours; })
+            ? doc.windowHours : windowHours
+        };
+      });
+  }
+
+  function serverGetArchive(){
+    return fetch("/api/archive", { headers: { "Accept": "application/json" } })
+      .then(function(r){
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function(doc){
+        if (!doc || !doc.reports) throw new Error("no reports in document");
+        return doc.reports;
+      });
+  }
+
+  function serverPutWatchlist(list){
+    return fetch("/api/watchlist", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ windowHours: windowHours, terms: list })
+    }).then(function(r){
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+  function loadLocalReports(){
+    try {
+      var raw = localStorage.getItem(LS_REPORTS);
+      if (raw) return JSON.parse(raw);
+    } catch(e){}
+    return [];
+  }
+  function saveLocalReports(list){
+    try { localStorage.setItem(LS_REPORTS, JSON.stringify(list.slice(0, 7))); } catch(e){}
+  }
+
+  function saveRow(id, data){
+    if (mode === "cloud"){
+      if (!db) return;
+      db.doc("watchlist/" + id).set(data).catch(function(e){ fail(e, "save that term"); });
+      return;
+    }
+    data.id = id;
+    rows = rows.filter(function(r){ return r.id !== id; }).concat([data]);
+    saveLocalWatchlist(rows);
+    render();
+  }
+  function patchRow(id, data){
+    if (mode === "cloud"){
+      if (!db) return;
+      data.updatedAt = new Date().toISOString();
+      data.updatedBy = who();
+      db.doc("watchlist/" + id).update(data).catch(function(e){ fail(e, "save that change"); });
+      return;
+    }
+    rows = rows.map(function(r){
+      if (r.id !== id) return r;
+      var merged = {};
+      for (var k in r) merged[k] = r[k];
+      for (var k2 in data) merged[k2] = data[k2];
+      merged.updatedAt = new Date().toISOString();
+      merged.updatedBy = who();
+      return merged;
+    });
+    saveLocalWatchlist(rows);
+    render();
+  }
+  function dropRow(id){
+    if (mode === "cloud"){
+      if (!db) return;
+      db.doc("watchlist/" + id).delete().catch(function(e){ fail(e, "remove that term"); });
+      return;
+    }
+    rows = rows.filter(function(r){ return r.id !== id; });
+    saveLocalWatchlist(rows);
+    render();
+  }
+  function applyNewReport(report){
+    if (mode === "cloud" && db){
+      renderReportTab(report); // optimistic; the live subscription confirms shortly after
+      db.doc("reports/" + report.date).set(report).catch(function(){ /* still shown on screen */ });
+      return;
+    }
+    if (serverBacked){
+      // The server already saved this report to shared storage as part of
+      // handling /api/refresh (see local_server.py) -- show it immediately
+      // rather than waiting on a round trip, then re-sync the Archive tab
+      // from that same shared storage so it reflects everyone's runs, not
+      // just this browser's.
+      renderReportTab(report);
+      serverGetArchive().then(function(list){
+        localReports = list;
+        renderArchive(localReports);
+      }).catch(function(){ /* report is already shown; archive just stays as it was */ });
+      return;
+    }
+    localReports = [report].concat(localReports.filter(function(r){ return r.date !== report.date; }));
+    localReports.sort(function(a, b){ return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
+    localReports = localReports.slice(0, 7);
+    saveLocalReports(localReports);
+    renderReportTab(localReports[0] || null);
+    renderArchive(localReports);
+  }
+
+  /* ---------- render watchlist ---------- */
+  function render(){
+    var host = $("#groups");
+    var total = rows.length, on = rows.filter(function(r){ return r.enabled !== false; }).length;
+    $("#termCount").textContent = dbReady ? String(on) : "\u2014";
+    $("#termCount").classList.toggle("zero", dbReady && on === 0);
+    $("#watchTally").textContent = dbReady ? String(total) : "\u2014";
+
+    if (!dbReady){ return; }
+
+    host.innerHTML = "";
+    CATS.forEach(function(cat){
+      var list = byCat(cat.id);
+      var live = list.filter(function(r){ return r.enabled !== false; }).length;
+      var grp = document.createElement("div");
+      grp.className = "grp";
+
+      var head = document.createElement("header");
+      head.innerHTML =
+        '<h3>' + esc(cat.title) + ' <span class="tally">' + live + " / " + list.length + '</span></h3>' +
+        '<p>' + esc(cat.note) + '</p>';
+      grp.appendChild(head);
+
+      var ul = document.createElement("ul");
+      ul.className = "rows";
+
+      if (!list.length){
+        var none = document.createElement("li");
+        none.className = "loading";
+        none.textContent = "Nothing here yet.";
+        ul.appendChild(none);
+      }
+
+      list.forEach(function(r){
+        var li = document.createElement("li");
+        if (editing === r.id){ li.className = "editor"; li.appendChild(editForm(cat, r)); ul.appendChild(li); return; }
+
+        li.className = "row" + (r.enabled === false ? " off" : "");
+        var aliases = (r.aliases || []).map(function(a){ return '<span>' + esc(a) + '</span>'; }).join("");
+        var stampWho = r.updatedBy || r.addedBy;
+        var stampAt  = istStamp(r.updatedAt || r.createdAt);
+        var state = readOnly
+          ? '<span class="watch-state">' + (r.enabled === false ? "Off" : "On") + '</span>'
+          : '<input class="tgl" type="checkbox" ' + (r.enabled === false ? "" : "checked") +
+            ' aria-label="Include ' + esc(r.name) + ' in the sweep">';
+        li.innerHTML = state +
+          '<div class="body">' +
+            (cat.kind === "query" && r.notes
+              ? '<div class="nm">' + esc(r.notes) + '</div><div class="q">' + esc(r.name) + '</div>'
+              : '<div class="nm">' + esc(r.name) + '</div>') +
+            (aliases ? '<div class="alias">' + aliases + '</div>' : "") +
+            (r.notes && cat.kind !== 'query' ? '<div class="meta">' + esc(r.notes) + '</div>' : "") +
+            (stampWho || stampAt ? '<div class="meta">' + esc(stampWho || "") + (stampAt ? " \u00b7 " + esc(stampAt) : "") + '</div>' : "") +
+          '</div>' +
+          (readOnly ? "" : '<div class="acts">' +
+            '<button class="icon" type="button" data-act="edit">Edit</button>' +
+            '<button class="icon danger" type="button" data-act="del">Remove</button>' +
+          '</div>');
+
+        ul.appendChild(li);
+        if (readOnly) return;
+        $(".tgl", li).addEventListener("change", function(ev){
+          patchRow(r.id, { enabled: ev.target.checked });
+        });
+        li.querySelector('[data-act="edit"]').addEventListener("click", function(){
+          editing = r.id; removing = null; render();
+        });
+        li.querySelector('[data-act="del"]').addEventListener("click", function(){
+          removing = r.id; editing = null; render();
+        });
+        if (removing === r.id){
+          var c = document.createElement("li");
+          c.className = "confirm";
+          c.innerHTML = '<span>Remove <b>' + esc(r.name) + '</b> from the watchlist?</span>' +
+                        '<button class="btn sm" type="button" data-act="no">Keep it</button>' +
+                        '<button class="btn sm pri" type="button" data-act="yes">Remove</button>';
+          c.querySelector('[data-act="no"]').addEventListener("click", function(){ removing = null; render(); });
+          c.querySelector('[data-act="yes"]').addEventListener("click", function(){ removing = null; dropRow(r.id); });
+          ul.appendChild(c);
+        }
+      });
+
+      if (editing === "new:" + cat.id){
+        var add = document.createElement("li");
+        add.className = "editor";
+        add.appendChild(editForm(cat, null));
+        ul.appendChild(add);
+      }
+      grp.appendChild(ul);
+      if (readOnly){ host.appendChild(grp); return; }
+
+      var foot = document.createElement("footer");
+      var btn = document.createElement("button");
+      btn.className = "btn";
+      btn.type = "button";
+      btn.textContent = "+ " + cat.addLabel;
+      btn.addEventListener("click", function(){ editing = "new:" + cat.id; removing = null; render(); });
+      foot.appendChild(btn);
+      grp.appendChild(foot);
+
+      host.appendChild(grp);
+    });
+
+    var focusable = $(".editor input, .editor textarea");
+    if (focusable) focusable.focus();
+  }
+
+  function editForm(cat, r){
+    var isQuery = cat.kind === "query";
+    var frag = document.createElement("div");
+    frag.style.display = "grid";
+    frag.style.gap = "7px";
+    frag.innerHTML =
+      '<div class="lbl">' + (isQuery ? "Query" : "Name") + '</div>' +
+      (isQuery
+        ? '<textarea data-f="name" spellcheck="false" placeholder="&quot;reasoning model&quot; OR &quot;language model&quot;">' + esc(r ? r.name : "") + '</textarea>'
+        : '<input data-f="name" type="text" maxlength="120" placeholder="Company name" value="' + esc(r ? r.name : "") + '">') +
+      '<div class="lbl">' + (isQuery ? "Variations" : "Aliases") + '</div>' +
+      '<input data-f="aliases" type="text" maxlength="300" placeholder="comma separated, optional" value="' + esc(r ? (r.aliases || []).join(", ") : "") + '">' +
+      '<div class="lbl">' + (isQuery ? 'Display name' : 'Note') + '</div>' +
+      '<input data-f="notes" type="text" maxlength="140" placeholder="optional" value="' + esc(r ? (r.notes || "") : "") + '">' +
+      '<div class="btns">' +
+        '<button class="btn pri sm" type="button" data-act="save">' + (r ? "Save" : "Add") + '</button>' +
+        '<button class="btn sm" type="button" data-act="cancel">Cancel</button>' +
+      '</div>';
+
+    var nameEl = frag.querySelector('[data-f="name"]');
+    var saveBtn = frag.querySelector('[data-act="save"]');
+    function sync(){ saveBtn.disabled = !nameEl.value.trim(); }
+    nameEl.addEventListener("input", sync);
+    sync();
+
+    frag.querySelector('[data-act="cancel"]').addEventListener("click", function(){ editing = null; render(); });
+    saveBtn.addEventListener("click", function(){
+      var name = nameEl.value.trim();
+      if (!name) return;
+      var aliases = splitList(frag.querySelector('[data-f="aliases"]').value);
+      var notes = frag.querySelector('[data-f="notes"]').value.trim();
+      var now = new Date().toISOString();
+      if (r){
+        patchRow(r.id, { name:name, aliases:aliases, notes:notes });
+      } else {
+        var id = slug(name);
+        if (rows.some(function(x){ return x.id === id; })) id = id + "-" + Date.now().toString(36).slice(-4);
+        var maxOrder = byCat(cat.id).reduce(function(m,x){ return Math.max(m, x.order || 0); }, 0);
+        saveRow(id, {
+          name:name, category:cat.id, aliases:aliases, notes:notes, enabled:true,
+          order:maxOrder + 10, addedBy:who(), createdAt:now, updatedBy:who(), updatedAt:now
+        });
+      }
+      editing = null; render();
+    });
+    frag.addEventListener("keydown", function(ev){
+      if (ev.key === "Escape"){ editing = null; render(); }
+      if (ev.key === "Enter" && ev.target.tagName !== "TEXTAREA"){ ev.preventDefault(); saveBtn.click(); }
+    });
+    return frag;
+  }
+
+  /* ---------- connect ----------
+     Two working modes, not a working mode and a broken one:
+       "cloud" -- claude.ai's shared db. Everyone with the link sees the
+                  same watchlist and reports.
+       "local" -- this browser's localStorage only, seeded with a small
+                  sample watchlist. Exists so Run sweep (and editing
+                  the watchlist) can be tested outside claude.ai, which is
+                  the whole point of running this via a local server. */
+  function enterLocalMode(reason){
+    mode = "local";
+    localReports = loadLocalReports();
+
+    /* Prefer the server's shared watchlist when this page is being served
+       by our own server; fall back to this browser's copy when it is not
+       (the file opened directly, or the endpoint unavailable). */
+    serverGetWatchlist().then(function(doc){
+      serverBacked = true;
+      rows = doc.rows;
+      windowHours = doc.windowHours;
+      syncWindowSelect();
+      // Every Run sweep and every scheduled sweep now save through the
+      // same shared storage (see local_server.py's /api/refresh and
+      // sweep_runner.py) -- read that history back instead of only this
+      // one browser's own. A failure here shows the watchlist regardless;
+      // it just leaves the Report/Archive tabs on whatever this browser
+      // already had, rather than blocking the whole page on it.
+      serverGetArchive().then(function(list){
+        localReports = list;
+      }).catch(function(){}).then(function(){
+        finishLocalMode(
+          'Changes are saved to shared storage. ' +
+          'The ' +
+          'scheduled sweep uses the same watchlist.'
+        );
+      });
+    }).catch(function(){
+      serverBacked = false;
+      rows = loadLocalWatchlist();
+      windowHours = loadLocalWindowHours();
+      syncWindowSelect();
+      finishLocalMode(
+        '<b>Local-only mode.</b> ' + esc(reason) +
+        ' Changes here are saved in this browser only, seeded with a small ' +
+        'sample watchlist so Run sweep has something to work with.'
+      );
+    });
+  }
+
+  function finishLocalMode(bannerHtml){
+    dbReady = true;
+    $("#watchBanner").innerHTML = '<div class="demo-banner"><span>' + bannerHtml + '</span></div>';
+    $("#reportBanner").innerHTML = "";
+    $("#archiveBanner").innerHTML = "";
+
+    render();
+    $("#forceRefresh").disabled = false;
+    renderReportTab(localReports[0] || null);
+    renderArchive(localReports);
+  }
+
+  function enterSnapshotMode(){
+    $("#sweepControls").hidden = true;
+    $("#nameEditor").hidden = true;
+    $("#watchHint").textContent = "The publisher manages this watchlist in watchlist.json.";
+    fetch("data/briefing.json").then(function(response){
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    }).then(function(snapshot){
+      if (!snapshot.watchlist || !Array.isArray(snapshot.watchlist.terms) || !Array.isArray(snapshot.reports)){
+        throw new Error("Invalid briefing snapshot");
+      }
+      rows = snapshot.watchlist.terms.map(normaliseRow);
+      windowHours = snapshot.watchlist.windowHours;
+      syncWindowSelect();
+      localReports = snapshot.reports;
+      dbReady = true;
+      render();
+      renderReportTab(localReports[0] || null);
+      renderArchive(localReports);
+    }).catch(function(){
+      var empty = '<p class="empty">The published briefing could not be loaded.</p>';
+      $("#reportBody").innerHTML = empty;
+      $("#groups").innerHTML = empty;
+      $("#archiveList").innerHTML = empty;
+      setStatus("Try reloading the dashboard.", "warn");
+    });
+  }
+
+  if (readOnly){
+    enterSnapshotMode();
+  } else if (!window.claude || !window.claude.use){
+    enterLocalMode("You\u2019re viewing this outside claude.ai, so shared editing isn\u2019t available.");
+  } else {
+    window.claude.use("db").then(function(store){
+      if (!store){
+        enterLocalMode("Shared editing couldn\u2019t be granted in this view.");
+        return;
+      }
+      mode = "cloud";
+      db = store;
+
+      db.collection("watchlist").onSnapshot(function(snap){
+        rows = snap.docs.map(function(d){
+          var data = d.data() || {};
+          return {
+            id: d.id,
+            name: data.name || d.id,
+            category: data.category || "clients",
+            aliases: Array.isArray(data.aliases) ? data.aliases : [],
+            notes: typeof data.notes === "string" ? data.notes : "",
+            enabled: data.enabled !== false,
+            order: typeof data.order === "number" ? data.order : 0,
+            addedBy: data.addedBy, updatedBy: data.updatedBy,
+            createdAt: data.createdAt, updatedAt: data.updatedAt
+          };
+        });
+        dbReady = true;
+        $("#forceRefresh").disabled = false;
+        render();
+      }, function(err){
+        enterLocalMode(err && err.code === "revoked"
+          ? "Your access ended while the page was open, so this fell back to local-only mode."
+          : "The watchlist stopped syncing, so this fell back to local-only mode.");
+      });
+
+      db.collection("reports").orderBy("date", "desc").limit(7).onSnapshot(function(snap){
+        var list = snap.docs.map(function(d){ return d.data() || {}; });
+        renderReportTab(list[0] || null);
+        renderArchive(list);
+      }, function(err){
+        reportsOffline(err);
+      });
+
+    }, function(){
+      enterLocalMode("The shared store could not be reached.");
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

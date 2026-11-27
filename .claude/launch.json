@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-signal-ui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["ai_signal/live/local_server.py", "8787"],
+      "port": 8787
+    }
+  ]
+}
